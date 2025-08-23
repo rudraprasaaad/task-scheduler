@@ -1,4 +1,4 @@
-package exectuor
+package executor
 
 import (
 	"context"
@@ -20,6 +20,11 @@ func NewExecutorRegistry() *ExecutorRegistry {
 	registry := &ExecutorRegistry{
 		executors: make(map[string]TaskExecutor),
 	}
+
+	registry.Register("email", &EmailExecutor{})
+	registry.Register("notification", &NotificationExecutor{})
+	registry.Register("report", &ReportExecutor{})
+	registry.Register("maintenance", &MaintenanceExecutor{})
 
 	return registry
 }

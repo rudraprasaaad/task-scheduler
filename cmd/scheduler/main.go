@@ -18,7 +18,13 @@ import (
 func main() {
 	cfg := config.Load()
 
-	taskHandler := handlers.NewTaskHandler()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	taskHandler := handlers.NewTaskHandler(cfg.MaxWorkers)
+
+	taskHandler.StartWorkers(ctx)
+	defer taskHandler.StopWorkers()
 
 	router := mux.NewRouter()
 
@@ -27,8 +33,9 @@ func main() {
 	api := router.PathPrefix("/api/v1").Subrouter()
 	api.HandleFunc("/tasks", taskHandler.CreateTask).Methods("POST")
 	api.HandleFunc("/tasks", taskHandler.ListTasks).Methods("GET")
-	api.HandleFunc("/tasks/{id}", taskHandler.GetTask).Methods("GET")
+	api.HandleFunc("/tasks/{id}", taskHandler.GetTaskByID).Methods("GET")
 	api.HandleFunc("/queue/status", taskHandler.GetQueueStatus).Methods("GET")
+	api.HandleFunc("/workers/stats", taskHandler.GetWorkerStats).Methods("GET")
 
 	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -44,7 +51,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Server starting on port %s", cfg.Port)
+		log.Printf("Server starting on port %s with %d workers", cfg.Port, cfg.MaxWorkers)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed to start: %v", err)
 		}
@@ -55,11 +62,12 @@ func main() {
 	<-quit
 
 	log.Println("Shutting down server...")
+	cancel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	shutdownCtx, shutDownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutDownCancel()
 
-	if err := server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
