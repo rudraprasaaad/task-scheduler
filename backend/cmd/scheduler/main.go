@@ -36,6 +36,7 @@ func main() {
 	api.HandleFunc("/tasks/{id}", taskHandler.GetTaskByID).Methods("GET")
 	api.HandleFunc("/queue/status", taskHandler.GetQueueStatus).Methods("GET")
 	api.HandleFunc("/workers/stats", taskHandler.GetWorkerStats).Methods("GET")
+	api.HandleFunc("/task/stats", taskHandler.GetTaskStats).Methods("GET")
 
 	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

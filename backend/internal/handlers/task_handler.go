@@ -154,7 +154,7 @@ func (h *TaskHandler) GetWorkerStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(stats)
 }
 
-func (h *TaskHandler) GetTaskStatus(w http.ResponseWriter, r *http.Request) {
+func (h *TaskHandler) GetTaskStats(w http.ResponseWriter, r *http.Request) {
 	h.mutex.RLock()
 	var pending, running, completed, failed int
 
