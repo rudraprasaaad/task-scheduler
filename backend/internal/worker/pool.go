@@ -149,7 +149,7 @@ func (p *Pool) processTask(ctx context.Context, worker *models.Worker, task *mod
 	err := p.executeTask(ctx, task)
 
 	if err != nil {
-		p.handleTaskFailure(ctx, task, err)
+		p.handleTaskFailure(task, err)
 	} else {
 		p.handleTaskSuccess(task)
 	}
@@ -184,7 +184,7 @@ func (p *Pool) handleTaskSuccess(task *models.Task) {
 	log.Printf("✅ Task %s completed successfully", task.ID)
 }
 
-func (p *Pool) handleTaskFailure(ctx context.Context, task *models.Task, execErr error) {
+func (p *Pool) handleTaskFailure(task *models.Task, execErr error) {
 	task.Retries++
 	task.Error = execErr.Error()
 
