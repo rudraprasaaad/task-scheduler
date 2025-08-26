@@ -3,54 +3,36 @@ package handlers
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"sync"
+	"strconv"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/rudraprasaaad/task-scheduler/internal/models"
 	"github.com/rudraprasaaad/task-scheduler/internal/queue"
+	"github.com/rudraprasaaad/task-scheduler/internal/repository"
 	"github.com/rudraprasaaad/task-scheduler/internal/worker"
 )
 
 type TaskHandler struct {
-	queue *queue.PriorityQueue
-	tasks map[string]*models.Task
-	pool  *worker.Pool
-	mutex sync.RWMutex
+	taskRepo   *repository.TaskRepository
+	workerRepo *repository.WorkerRepository
+	queue      *queue.DatabaseQueue
+	pool       *worker.Pool
 }
 
-func NewTaskHandler(workerCount int) *TaskHandler {
-	queue := queue.NewPriorityQueue()
+func NewTaskHandler(taskRepo *repository.TaskRepository, workerRepo *repository.WorkerRepository, workerCount int) *TaskHandler {
+	queue := queue.NewDatabaseQueue(taskRepo)
 
 	handler := &TaskHandler{
-		queue: queue,
-		tasks: make(map[string]*models.Task),
+		taskRepo:   taskRepo,
+		workerRepo: workerRepo,
+		queue:      queue,
 	}
 
-	handler.pool = worker.NewPool(workerCount, queue, handler)
+	handler.pool = worker.NewPool(workerCount, queue, workerRepo)
 
 	return handler
-}
-
-func (h *TaskHandler) UpdateTask(task *models.Task) error {
-	h.mutex.Lock()
-	defer h.mutex.Unlock()
-	h.tasks[task.ID] = task
-	return nil
-}
-
-func (h *TaskHandler) GetTask(id string) (*models.Task, error) {
-	h.mutex.RLock()
-	defer h.mutex.RUnlock()
-
-	task, exists := h.tasks[id]
-	if !exists {
-		return nil, fmt.Errorf("task not found")
-	}
-
-	return task, nil
 }
 
 func (h *TaskHandler) StartWorkers(ctx context.Context) {
@@ -96,9 +78,10 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		task.MaxRetries = req.MaxRetries
 	}
 
-	h.tasks[task.ID] = task
-
-	h.queue.Enqueue(task)
+	if err := h.queue.Enqueue(task); err != nil {
+		http.Error(w, "Failed to create task", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -109,11 +92,11 @@ func (h *TaskHandler) GetTaskByID(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	taskID := vars["id"]
 
-	h.mutex.RLock()
-	task, exists := h.tasks[taskID]
-	h.mutex.RUnlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	if !exists {
+	task, err := h.taskRepo.GetByID(ctx, taskID)
+	if err != nil {
 		http.Error(w, "Task not found", http.StatusNotFound)
 		return
 	}
@@ -123,23 +106,50 @@ func (h *TaskHandler) GetTaskByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *TaskHandler) ListTasks(w http.ResponseWriter, r *http.Request) {
-	h.mutex.RLock()
-	tasks := make([]*models.Task, 0, len(h.tasks))
-	for _, task := range h.tasks {
-		tasks = append(tasks, task)
-	}
-	h.mutex.RUnlock()
+	limitStr := r.URL.Query().Get("limit")
+	offsetStr := r.URL.Query().Get("offset")
 
-	w.Header().Set("Content-Type", "applicaton/json")
+	limit := 50
+	if limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	offset := 0
+	if offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	tasks, err := h.taskRepo.List(ctx, limit, offset)
+	if err != nil {
+		http.Error(w, "Failed to retrieve tasks", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"tasks": tasks,
-		"count": len(tasks),
+		"tasks":  tasks,
+		"count":  len(tasks),
+		"limit":  limit,
+		"offset": offset,
 	})
 }
 
 func (h *TaskHandler) GetQueueStatus(w http.ResponseWriter, r *http.Request) {
+	queueSize, err := h.queue.Size()
+	if err != nil {
+		http.Error(w, "Failed to get queue status", http.StatusInternalServerError)
+		return
+	}
+
 	status := map[string]interface{}{
-		"queue_size": h.queue.Size(),
+		"queue_size": queueSize,
 		"timestamp":  time.Now(),
 	}
 
@@ -148,39 +158,54 @@ func (h *TaskHandler) GetQueueStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *TaskHandler) GetWorkerStats(w http.ResponseWriter, r *http.Request) {
-	stats := h.pool.GetWorkerStats()
+	stats, err := h.pool.GetWorkerStats()
+	if err != nil {
+		http.Error(w, "Failed to get worker stats", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
 }
 
 func (h *TaskHandler) GetTaskStats(w http.ResponseWriter, r *http.Request) {
-	h.mutex.RLock()
-	var pending, running, completed, failed int
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	for _, task := range h.tasks {
-		switch task.Status {
-		case models.TaskStatusPending:
-			pending++
-		case models.TaskStatusRunning:
-			running++
-		case models.TaskStatusCompleted:
-			completed++
-		case models.TaskStatusFailed:
-			failed++
-		}
+	stats, err := h.taskRepo.GetStats(ctx)
+	if err != nil {
+		http.Error(w, "Failed to get task stats", http.StatusInternalServerError)
+		return
 	}
-	h.mutex.RUnlock()
 
-	stats := map[string]interface{}{
-		"total_tasks": len(h.tasks),
-		"pending":     pending,
-		"running":     running,
-		"completed":   completed,
-		"failed":      failed,
-		"queue_size":  h.queue.Size(),
+	queueSize, _ := h.queue.Size()
+
+	responseStats := make(map[string]interface{})
+	total := 0
+
+	for status, count := range stats {
+		responseStats[status] = count
+		total += count
 	}
+
+	responseStats["queue_size"] = queueSize
+	responseStats["total_tasks"] = total
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
+}
+
+func (h *TaskHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := h.taskRepo.Delete(ctx, taskID); err != nil {
+		http.Error(w, "Failed to delete task", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/rudraprasaaad/task-scheduler/internal/executor"
 	"github.com/rudraprasaaad/task-scheduler/internal/models"
 	"github.com/rudraprasaaad/task-scheduler/internal/queue"
+	"github.com/rudraprasaaad/task-scheduler/internal/repository"
 )
 
 type Worker struct {
@@ -27,16 +28,11 @@ const (
 	WorkerStatusStopped WorkerStatus = "stopped"
 )
 
-type TaskStorage interface {
-	UpdateTask(task *models.Task) error
-	GetTask(id string) (*models.Task, error)
-}
-
 type Pool struct {
-	workers  map[string]*Worker
-	queue    *queue.PriorityQueue
-	executor *executor.ExecutorRegistry
-	storage  TaskStorage
+	workers    map[string]*models.Worker
+	queue      *queue.DatabaseQueue
+	executor   *executor.ExecutorRegistry
+	workerRepo *repository.WorkerRepository
 
 	workerCount int
 	stopChan    chan struct{}
@@ -44,12 +40,12 @@ type Pool struct {
 	mutex       sync.RWMutex
 }
 
-func NewPool(workerCount int, queue *queue.PriorityQueue, storage TaskStorage) *Pool {
+func NewPool(workerCount int, queue *queue.DatabaseQueue, workerRepo *repository.WorkerRepository) *Pool {
 	return &Pool{
-		workers:     make(map[string]*Worker),
+		workers:     make(map[string]*models.Worker),
 		queue:       queue,
 		executor:    executor.NewExecutorRegistry(),
-		storage:     storage,
+		workerRepo:  workerRepo,
 		workerCount: workerCount,
 		stopChan:    make(chan struct{}),
 	}
@@ -60,10 +56,15 @@ func (p *Pool) Start(ctx context.Context) {
 
 	for i := 0; i < p.workerCount; i++ {
 		workerID := fmt.Sprintf("worker-%d", i+1)
-		worker := &Worker{
+		worker := &models.Worker{
 			ID:       workerID,
-			Status:   WorkerStatusIdle,
+			Status:   models.WorkerStatusIdle,
 			LastSeen: time.Now(),
+		}
+
+		if err := p.registerWorker(ctx, worker); err != nil {
+			log.Printf("Failed to register worker %s: %v", workerID, err)
+			continue
 		}
 
 		p.mutex.Lock()
@@ -78,49 +79,68 @@ func (p *Pool) Start(ctx context.Context) {
 }
 
 func (p *Pool) Stop() {
-	log.Println("Stopping worker pool....")
+	log.Println("Stopping worker pool...")
 	close(p.stopChan)
 	p.wg.Wait()
+
+	ctx := context.Background()
+	p.mutex.RLock()
+	for _, worker := range p.workers {
+		p.workerRepo.UpdateStatus(ctx, worker.ID, models.WorkerStatusStopped)
+	}
+	p.mutex.RUnlock()
+
 	log.Println("Worker pool stopped")
 }
 
-func (p *Pool) runWorker(ctx context.Context, worker *Worker) {
+func (p *Pool) registerWorker(ctx context.Context, worker *models.Worker) error {
+	return p.workerRepo.Register(ctx, worker)
+}
+
+func (p *Pool) runWorker(ctx context.Context, worker *models.Worker) {
 	defer p.wg.Done()
 
 	log.Printf("Worker %s started", worker.ID)
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			log.Printf("Worker %s stopping due to context cancellation", worker.ID)
-			p.updateWorkerStatus(worker, WorkerStatusStopped)
+			p.updateWorkerStatus(ctx, worker, models.WorkerStatusStopped)
 			return
 		case <-p.stopChan:
 			log.Printf("Worker %s stopping", worker.ID)
-			p.updateWorkerStatus(worker, WorkerStatusStopped)
+			p.updateWorkerStatus(ctx, worker, models.WorkerStatusStopped)
 			return
-		default:
-			task := p.queue.Dequeue()
-			if task == nil {
-				time.Sleep(100 * time.Millisecond)
+		case <-ticker.C:
+			tasks, err := p.queue.Dequeue(1)
+			if err != nil {
+				log.Printf("Worker %s failed to dequeue tasks: %v", worker.ID, err)
 				continue
 			}
 
+			if len(tasks) == 0 {
+				continue
+			}
+
+			task := tasks[0]
 			p.processTask(ctx, worker, task)
 		}
 	}
 }
 
-func (p *Pool) processTask(ctx context.Context, worker *Worker, task *models.Task) {
-	p.updateWorkerStatus(worker, WorkerStatusRunning)
+func (p *Pool) processTask(ctx context.Context, worker *models.Worker, task *models.Task) {
+	p.updateWorkerStatus(ctx, worker, models.WorkerStatusRunning)
 
 	task.Status = models.TaskStatusRunning
 	task.WorkerID = worker.ID
 	now := time.Now()
 	task.StartedAt = &now
-	task.UpdatedAt = now
 
-	if err := p.storage.UpdateTask(task); err != nil {
+	if err := p.queue.UpdateTask(task); err != nil {
 		log.Printf("Failed to update task status: %v", err)
 	}
 
@@ -129,13 +149,14 @@ func (p *Pool) processTask(ctx context.Context, worker *Worker, task *models.Tas
 	err := p.executeTask(ctx, task)
 
 	if err != nil {
-		p.handleTaskFailure(task, err)
+		p.handleTaskFailure(ctx, task, err)
 	} else {
 		p.handleTaskSuccess(task)
 	}
 
 	worker.TasksRun++
-	p.updateWorkerStatus(worker, WorkerStatusIdle)
+	p.workerRepo.IncrementTaskCount(ctx, worker.ID)
+	p.updateWorkerStatus(ctx, worker, models.WorkerStatusIdle)
 }
 
 func (p *Pool) executeTask(ctx context.Context, task *models.Task) error {
@@ -154,20 +175,18 @@ func (p *Pool) handleTaskSuccess(task *models.Task) {
 	task.Status = models.TaskStatusCompleted
 	now := time.Now()
 	task.CompletedAt = &now
-	task.UpdatedAt = now
 	task.Error = ""
 
-	if err := p.storage.UpdateTask(task); err != nil {
-		log.Printf("Failed to update task after success : %v", err)
+	if err := p.queue.UpdateTask(task); err != nil {
+		log.Printf("Failed to update task after success: %v", err)
 	}
 
 	log.Printf("✅ Task %s completed successfully", task.ID)
 }
 
-func (p *Pool) handleTaskFailure(task *models.Task, execErr error) {
+func (p *Pool) handleTaskFailure(ctx context.Context, task *models.Task, execErr error) {
 	task.Retries++
 	task.Error = execErr.Error()
-	task.UpdatedAt = time.Now()
 
 	if task.Retries < task.MaxRetries {
 		backoff := time.Duration(task.Retries*task.Retries) * time.Second
@@ -176,33 +195,39 @@ func (p *Pool) handleTaskFailure(task *models.Task, execErr error) {
 		task.WorkerID = ""
 		task.StartedAt = nil
 
-		p.queue.Enqueue(task)
-
-		log.Printf("⚠️ Task %s failed (attempt %d%d), retrying in %v: %v", task.ID, task.Retries, task.MaxRetries, backoff, execErr)
+		log.Printf("⚠️ Task %s failed (attempt %d/%d), retrying in %v: %v",
+			task.ID, task.Retries, task.MaxRetries, backoff, execErr)
 	} else {
 		task.Status = models.TaskStatusFailed
 		now := time.Now()
 		task.CompletedAt = &now
 
-		log.Printf("❌ Task %s failed permanently after %d attempts:L %v", task.ID, task.Retries, execErr)
+		log.Printf("❌ Task %s failed permanently after %d attempts: %v",
+			task.ID, task.Retries, execErr)
 	}
 
-	if err := p.storage.UpdateTask(task); err != nil {
+	if err := p.queue.UpdateTask(task); err != nil {
 		log.Printf("Failed to update task after failure: %v", err)
 	}
 }
 
-func (p *Pool) updateWorkerStatus(worker *Worker, status WorkerStatus) {
+func (p *Pool) updateWorkerStatus(ctx context.Context, worker *models.Worker, status models.WorkerStatus) {
 	p.mutex.Lock()
-	defer p.mutex.Unlock()
-
 	worker.Status = status
 	worker.LastSeen = time.Now()
+	p.mutex.Unlock()
+
+	if err := p.workerRepo.UpdateStatus(ctx, worker.ID, status); err != nil {
+		log.Printf("Failed to update worker status in database: %v", err)
+	}
 }
 
 func (p *Pool) monitorWorkers(ctx context.Context) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
+
+	cleanupTicker := time.NewTicker(1 * time.Minute)
+	defer cleanupTicker.Stop()
 
 	for {
 		select {
@@ -212,6 +237,10 @@ func (p *Pool) monitorWorkers(ctx context.Context) {
 			return
 		case <-ticker.C:
 			p.logWorkerStats()
+		case <-cleanupTicker.C:
+			if err := p.workerRepo.CleanupStaleWorkers(ctx, 2*time.Minute); err != nil {
+				log.Printf("Failed to cleanup stale workers: %v", err)
+			}
 		}
 	}
 }
@@ -225,27 +254,32 @@ func (p *Pool) logWorkerStats() {
 
 	for _, worker := range p.workers {
 		switch worker.Status {
-		case WorkerStatusIdle:
+		case models.WorkerStatusIdle:
 			idle++
-		case WorkerStatusRunning:
+		case models.WorkerStatusRunning:
 			running++
-		case WorkerStatusStopped:
+		case models.WorkerStatusStopped:
 			stopped++
 		}
 		totalTasks += worker.TasksRun
 	}
 
-	log.Printf("Worker Stats - Idle: %d, Running: %d, Stopped: %d, Total Tasks: %d, Queue Size: %d", idle, running, stopped, totalTasks, p.queue.Size())
+	queueSize, _ := p.queue.Size()
+
+	log.Printf("Worker Stats - Idle: %d, Running: %d, Stopped: %d, Total Tasks: %d, Queue Size: %d",
+		idle, running, stopped, totalTasks, queueSize)
 }
 
-func (p *Pool) GetWorkerStats() map[string]interface{} {
-	p.mutex.RLock()
-	defer p.mutex.RUnlock()
+func (p *Pool) GetWorkerStats() (map[string]interface{}, error) {
+	ctx := context.Background()
 
-	stats := make(map[string]interface{})
-	workers := make([]map[string]interface{}, 0, len(p.workers))
+	dbWorkers, err := p.workerRepo.GetAll(ctx)
+	if err != nil {
+		return nil, err
+	}
 
-	for _, worker := range p.workers {
+	workers := make([]map[string]interface{}, 0, len(dbWorkers))
+	for _, worker := range dbWorkers {
 		workers = append(workers, map[string]interface{}{
 			"id":        worker.ID,
 			"status":    worker.Status,
@@ -254,9 +288,11 @@ func (p *Pool) GetWorkerStats() map[string]interface{} {
 		})
 	}
 
-	stats["workers"] = workers
-	stats["total_workers"] = len(p.workers)
-	stats["queue_size"] = p.queue.Size()
+	queueSize, _ := p.queue.Size()
 
-	return stats
+	return map[string]interface{}{
+		"workers":       workers,
+		"total_workers": len(dbWorkers),
+		"queue_size":    queueSize,
+	}, nil
 }

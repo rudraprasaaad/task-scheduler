@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/rudraprasaaad/task-scheduler/internal/database"
-	"github.com/rudraprasaaad/task-scheduler/internal/worker"
+	"github.com/rudraprasaaad/task-scheduler/internal/models"
 )
 
 type WorkerRepository struct {
@@ -18,7 +18,7 @@ func NewWorkerRepository(db *database.DB) *WorkerRepository {
 	return &WorkerRepository{db: db}
 }
 
-func (r *WorkerRepository) Register(ctx context.Context, worker *worker.Worker) error {
+func (r *WorkerRepository) Register(ctx context.Context, worker *models.Worker) error {
 	query := `
     INSERT INTO workers (id, status, last_seen, tasks_run, created_at)
     VALUES ($1, $2, $3, $4, $5)
@@ -35,7 +35,7 @@ func (r *WorkerRepository) Register(ctx context.Context, worker *worker.Worker) 
 	return nil
 }
 
-func (r *WorkerRepository) UpdateStatus(ctx context.Context, workerID string, status worker.WorkerStatus) error {
+func (r *WorkerRepository) UpdateStatus(ctx context.Context, workerID string, status models.WorkerStatus) error {
 	query := `
     UPDATE workers 
     SET status = $2, last_seen = $3
@@ -50,7 +50,19 @@ func (r *WorkerRepository) UpdateStatus(ctx context.Context, workerID string, st
 	return nil
 }
 
-func (r *WorkerRepository) GetAll(ctx context.Context) ([]*worker.Worker, error) {
+func (r *WorkerRepository) IncrementTaskCount(ctx context.Context, workerID string) error {
+	query := `UDPATE workers SET tasks_run = tasks_run + 1, last_seen = $2 WHERE id = $1`
+
+	_, err := r.db.ExecContext(ctx, query, workerID, time.Now())
+
+	if err != nil {
+		return fmt.Errorf("failed to increment task count: %w", err)
+	}
+
+	return nil
+}
+
+func (r *WorkerRepository) GetAll(ctx context.Context) ([]*models.Worker, error) {
 	query := `
     SELECT id, status, last_seen, tasks_run
     FROM workers
@@ -62,10 +74,10 @@ func (r *WorkerRepository) GetAll(ctx context.Context) ([]*worker.Worker, error)
 	}
 	defer rows.Close()
 
-	var workers []*worker.Worker
+	var workers []*models.Worker
 
 	for rows.Next() {
-		var w worker.Worker
+		var w models.Worker
 
 		err := rows.Scan(&w.ID, &w.Status, &w.LastSeen, &w.TasksRun)
 		if err != nil {

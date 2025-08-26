@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
 type DB struct {
@@ -28,7 +30,7 @@ func New(config *Config) (*DB, error) {
 		return nil, fmt.Errorf("failedll to ping database: %w", err)
 	}
 
-	log.Printf("Connected to PostgreSQL database:%s", config.DBname)
+	log.Printf("Connected to PostgreSQL database:%s", config.DBName)
 
 	return &DB{
 		DB:     db,
