@@ -34,7 +34,7 @@ message RegisterWorkerRequest {
 message RegisterWorkerResponse{
 	bool success = 1;
 	string message = 2;
-	string message_id = 3;
+	string assigned_id = 3;
 }
 
 message HeartbeatRequest {

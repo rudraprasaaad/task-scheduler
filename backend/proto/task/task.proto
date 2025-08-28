@@ -13,6 +13,7 @@ message Task{
 	string payload_json = 4;
 	int32 priority = 5;
 	string status = 6;
+	int32 retries = 7;
 	int32 max_retries = 8;
 	google.protobuf.Timestamp created_at = 9;
 	google.protobuf.Timestamp updated_at = 10;

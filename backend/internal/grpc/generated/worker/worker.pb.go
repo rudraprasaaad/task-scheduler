@@ -274,7 +274,7 @@ type RegisterWorkerResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
 	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	MessageId     string                 `protobuf:"bytes,3,opt,name=message_id,json=messageId,proto3" json:"message_id,omitempty"`
+	AssignedId    string                 `protobuf:"bytes,3,opt,name=assigned_id,json=assignedId,proto3" json:"assigned_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -323,9 +323,9 @@ func (x *RegisterWorkerResponse) GetMessage() string {
 	return ""
 }
 
-func (x *RegisterWorkerResponse) GetMessageId() string {
+func (x *RegisterWorkerResponse) GetAssignedId() string {
 	if x != nil {
-		return x.MessageId
+		return x.AssignedId
 	}
 	return ""
 }
@@ -565,12 +565,12 @@ const file_proto_worker_worker_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"B\n" +
 	"\x15RegisterWorkerRequest\x12)\n" +
-	"\x06worker\x18\x01 \x01(\v2\x11.worker.v1.WorkerR\x06worker\"k\n" +
+	"\x06worker\x18\x01 \x01(\v2\x11.worker.v1.WorkerR\x06worker\"m\n" +
 	"\x16RegisterWorkerResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1d\n" +
-	"\n" +
-	"message_id\x18\x03 \x01(\tR\tmessageId\"\xec\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1f\n" +
+	"\vassigned_id\x18\x03 \x01(\tR\n" +
+	"assignedId\"\xec\x01\n" +
 	"\x10HeartbeatRequest\x12\x1b\n" +
 	"\tworker_id\x18\x01 \x01(\tR\bworkerId\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12#\n" +

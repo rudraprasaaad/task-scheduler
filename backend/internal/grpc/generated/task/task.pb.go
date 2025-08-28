@@ -30,6 +30,7 @@ type Task struct {
 	PayloadJson   string                 `protobuf:"bytes,4,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"`
 	Priority      int32                  `protobuf:"varint,5,opt,name=priority,proto3" json:"priority,omitempty"`
 	Status        string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
+	Retries       int32                  `protobuf:"varint,7,opt,name=retries,proto3" json:"retries,omitempty"`
 	MaxRetries    int32                  `protobuf:"varint,8,opt,name=max_retries,json=maxRetries,proto3" json:"max_retries,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,10,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
@@ -112,6 +113,13 @@ func (x *Task) GetStatus() string {
 		return x.Status
 	}
 	return ""
+}
+
+func (x *Task) GetRetries() int32 {
+	if x != nil {
+		return x.Retries
+	}
+	return 0
 }
 
 func (x *Task) GetMaxRetries() int32 {
@@ -366,14 +374,15 @@ var File_proto_task_task_proto protoreflect.FileDescriptor
 
 const file_proto_task_task_proto_rawDesc = "" +
 	"\n" +
-	"\x15proto/task/task.proto\x12\atask.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x98\x04\n" +
+	"\x15proto/task/task.proto\x12\atask.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb2\x04\n" +
 	"\x04Task\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x12\n" +
 	"\x04type\x18\x03 \x01(\tR\x04type\x12!\n" +
 	"\fpayload_json\x18\x04 \x01(\tR\vpayloadJson\x12\x1a\n" +
 	"\bpriority\x18\x05 \x01(\x05R\bpriority\x12\x16\n" +
-	"\x06status\x18\x06 \x01(\tR\x06status\x12\x1f\n" +
+	"\x06status\x18\x06 \x01(\tR\x06status\x12\x18\n" +
+	"\aretries\x18\a \x01(\x05R\aretries\x12\x1f\n" +
 	"\vmax_retries\x18\b \x01(\x05R\n" +
 	"maxRetries\x129\n" +
 	"\n" +
