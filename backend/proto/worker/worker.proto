@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package worker.v1;
+
+option go_package = "github.com/rudraprasaaad/task-scheduler/internal/grpc/generated/worker";
+
+import "google/protobuf/timestamp.proto";
+
+message Worker{
+	string id = 1;
+	string status = 2;
+	string address = 3;
+	google.protobuf.Timestamp last_seen  = 4;
+	int32 tasks_run = 5;
+	int32 max_concurrent_tasks = 6;
+	int32 current_tasks = 7;
+	map<string, string> metadata = 8;
+}
+
+message HealthRequest{
+	string worker_id = 1;
+}
+
+message HealthResponse{
+	string status = 1;
+	google.protobuf.Timestamp timestamp = 2;
+	map<string, string> details = 3;
+}
+
+message RegisterWorkerRequest {
+	Worker worker = 1;
+}
+
+message RegisterWorkerResponse{
+	bool success = 1;
+	string message = 2;
+	string message_id = 3;
+}
+
+message HeartbeatRequest {
+	string worker_id = 1;
+	string status = 2;
+	int32 current_tasks = 3;
+	map<string, string> metrics = 4;
+}
+
+message HeartbeatResponse{
+	bool acknowledged = 1;
+	map<string, string> instructions = 2;
+}
+
+message GetWorkersRequest{
+	string status_filter = 1;
+}
+
+message GetWorkersResponse{
+	repeated Worker workers = 1;
+}
+
+service WorkerService {
+	rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+	rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+	rpc HealthCheck(HealthRequest) returns (HealthResponse);
+	rpc GetWorkers(GetWorkersRequest) returns (GetWorkersResponse);
+	rpc StreamHeartbeats(HeartbeatRequest) returns (stream HeartbeatResponse);
+}
