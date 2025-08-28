@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -16,6 +17,11 @@ import (
 	"github.com/rudraprasaaad/task-scheduler/internal/handlers"
 	"github.com/rudraprasaaad/task-scheduler/internal/middleware"
 	"github.com/rudraprasaaad/task-scheduler/internal/repository"
+
+	taskpb "github.com/rudraprasaaad/task-scheduler/internal/grpc/generated/task"
+	workerpb "github.com/rudraprasaaad/task-scheduler/internal/grpc/generated/worker"
+	"github.com/rudraprasaaad/task-scheduler/internal/grpc/server"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -38,6 +44,26 @@ func main() {
 
 	taskRepo := repository.NewTaskRepository(db)
 	workerRepo := repository.NewWorkerRepository(db)
+
+	grpcServer := grpc.NewServer()
+
+	taskServer := server.NewTaskServer(taskRepo, workerRepo)
+	workerServer := server.NewWorkerServer(workerRepo)
+
+	taskpb.RegisterTaskServiceServer(grpcServer, taskServer)
+	workerpb.RegisterWorkerServiceServer(grpcServer, workerServer)
+
+	grpcListener, err := net.Listen("tcp", ":9090")
+	if err != nil {
+		log.Fatalf("Failed to listen for gRPC: %v", err)
+	}
+
+	go func() {
+		log.Println("Starting gRPC server on :9090")
+		if err := grpcServer.Serve(grpcListener); err != nil {
+			log.Fatalf("Failed to server gRPC: %v", err)
+		}
+	}()
 
 	taskHandler := handlers.NewTaskHandler(taskRepo, workerRepo, cfg.MaxWorkers)
 
@@ -101,7 +127,7 @@ func main() {
 
 	log.Println("Shutting down server...")
 
-	cancel()
+	grpcServer.GracefulStop()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
@@ -109,6 +135,8 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
+
+	cancel()
 
 	log.Println("Server exited")
 }
