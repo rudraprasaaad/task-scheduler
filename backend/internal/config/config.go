@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/rudraprasaaad/task-scheduler/internal/database"
+	"github.com/rudraprasaaad/task-scheduler/internal/redis"
 )
 
 type Config struct {
@@ -15,6 +16,8 @@ type Config struct {
 	MaxWorkers  int
 
 	Database database.Config
+
+	Redis redis.Config
 }
 
 func Load() *Config {
@@ -33,7 +36,18 @@ func Load() *Config {
 			SSLMode:         getEnv("DB_SSL_MODE", "disable"),
 			MaxOpenConns:    getEnvAsInt("DB_MAX_OPEN_CONNS", 25),
 			MaxIdleConns:    getEnvAsInt("DB_MAX_IDLE_CONNS", 5),
-			ConnMaxLifetime: getEnvAsDuration("DB_CONN_MAX_LIFETIME", 5*time.Minute),
+			ConnMaxLifetime: getEnvAsDuration("DB_CONN_MAX_LIFETIME", "5m"),
+		},
+
+		Redis: redis.Config{
+			Host:            getEnv("REDIS_HOST", "localhost"),
+			Port:            getEnvAsInt("REDIS_PORT", 6379),
+			Password:        getEnv("REDIS_PASSWORD", ""),
+			DB:              getEnvAsInt("REDIS_DB", 0),
+			MaxRetries:      getEnvAsInt("REDIS_MAX_RETRIES", 3),
+			PoolSize:        getEnvAsInt("REDIS_POOL_SIZE", 20),
+			MinIdleConns:    getEnvAsInt("REDIS_MIN_IDLE_CONNS", 5),
+			ConnMaxLifetime: getEnvAsDuration("REDIS_CONN_MAX_LIFETIME", "10m"),
 		},
 	}
 }
@@ -54,11 +68,12 @@ func getEnvAsInt(key string, defaultValue int) int {
 	return defaultValue
 }
 
-func getEnvAsDuration(key string, defaultValue time.Duration) time.Duration {
+func getEnvAsDuration(key string, defaultValue string) time.Duration {
 	if value := os.Getenv(key); value != "" {
 		if duration, err := time.ParseDuration(value); err == nil {
 			return duration
 		}
 	}
-	return defaultValue
+	duration, _ := time.ParseDuration(defaultValue)
+	return duration
 }
