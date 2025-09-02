@@ -22,6 +22,7 @@ import (
 
 	taskpb "github.com/rudraprasaaad/task-scheduler/internal/grpc/generated/task"
 	workerpb "github.com/rudraprasaaad/task-scheduler/internal/grpc/generated/worker"
+	"github.com/rudraprasaaad/task-scheduler/internal/grpc/interceptor"
 	"github.com/rudraprasaaad/task-scheduler/internal/grpc/server"
 	"google.golang.org/grpc"
 )
@@ -64,7 +65,11 @@ func main() {
 	userRepo := repository.NewUserRepository(db)
 	cache := cache.NewRedisCache(redisClient, "task_scheduler:")
 
-	grpcServer := grpc.NewServer()
+	authInterceptor := interceptor.NewAuthInterceptor(cfg.Auth.JWTSecret)
+
+	grpcServer := grpc.NewServer(
+		grpc.UnaryInterceptor(authInterceptor.Unary()),
+	)
 	taskServer := server.NewTaskServer(taskRepo, workerRepo)
 	workerServer := server.NewWorkerServer(workerRepo)
 	taskpb.RegisterTaskServiceServer(grpcServer, taskServer)
