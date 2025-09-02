@@ -24,6 +24,23 @@ message Task{
 	string worker_id = 15;
 }
 
+message CreateTaskPayload{
+	string name = 1;
+	string type = 2;
+	string payload_json = 3;
+	int32 priority = 4;
+	int32 max_retries = 5;
+	google.protobuf.Timestamp scheduled_at = 6;
+}
+
+message CreateTaskRequest{
+	repeated CreateTaskPayload tasks = 1;
+}
+
+message CreateTaskResponse{
+	repeated Task tasks = 1;
+}
+
 message GetTaskRequest{
 	string worker_id = 1;
 	int32 limit = 2;
@@ -43,6 +60,8 @@ message UpdateTaskResponse{
 }
 
 service TaskService {
+	rpc CreateTask(CreateTaskRequest) returns (CreateTaskResponse);
+
 	rpc GetAvailableTask(GetTaskRequest) returns (GetTaskResponse);
 
 	rpc UpdateTask(UpdateTaskRequest) returns (UpdateTaskResponse);

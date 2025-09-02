@@ -6,7 +6,9 @@ import (
 	"log"
 	"time"
 
+	"github.com/rudraprasaaad/task-scheduler/internal/auth"
 	taskpb "github.com/rudraprasaaad/task-scheduler/internal/grpc/generated/task"
+	"github.com/rudraprasaaad/task-scheduler/internal/grpc/interceptor"
 	"github.com/rudraprasaaad/task-scheduler/internal/models"
 	"github.com/rudraprasaaad/task-scheduler/internal/repository"
 	"google.golang.org/grpc/codes"
@@ -25,6 +27,53 @@ func NewTaskServer(taskRepo *repository.TaskRepository, workerRepo *repository.W
 		taskRepo:   taskRepo,
 		workerRepo: workerRepo,
 	}
+}
+
+func (s *TaskServer) CreateTask(ctx context.Context, req *taskpb.CreateTaskRequest) (*taskpb.CreateTaskResponse, error) {
+	claims, ok := ctx.Value(interceptor.GrpcUserContextKey).(*auth.Claims)
+	if !ok {
+		return nil, status.Error(codes.Internal, "user claims not found in context")
+	}
+
+	log.Printf("CreateTask request received from UserID: %s", claims.UserID)
+
+	if len(req.Tasks) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "No tasks provided in request")
+	}
+
+	createdTasks := make([]*taskpb.Task, 0, len(req.Tasks))
+
+	for _, payload := range req.Tasks {
+		var pld map[string]interface{}
+		if err := json.Unmarshal([]byte(payload.PayloadJson), &pld); err != nil {
+			log.Printf("Failed to unmarshal payload for task '%s': %v", payload.Name, err)
+			continue
+		}
+
+		task := models.NewTask(payload.Name, payload.Type, pld)
+		task.Priority = models.TaskPriority(payload.Priority)
+		task.MaxRetries = int(payload.MaxRetries)
+		if payload.ScheduledAt.IsValid() {
+			task.ScheduledAt = payload.ScheduledAt.AsTime()
+		}
+
+		if err := s.taskRepo.Create(ctx, task); err != nil {
+			log.Printf("Failed to create task '%s' in database: %v", task.Name, err)
+
+			continue
+		}
+
+		pbTask, err := s.modelToProto(task)
+		if err != nil {
+			log.Printf("Failed to convert created task back to proto: %v", err)
+			continue
+		}
+		createdTasks = append(createdTasks, pbTask)
+	}
+
+	return &taskpb.CreateTaskResponse{
+		Tasks: createdTasks,
+	}, nil
 }
 
 func (s *TaskServer) GetAvailableTask(ctx context.Context, req *taskpb.GetTaskRequest) (*taskpb.GetTaskResponse, error) {
