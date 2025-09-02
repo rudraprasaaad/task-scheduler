@@ -261,3 +261,30 @@ func (r *TaskRepository) Delete(ctx context.Context, id string) error {
 
 	return nil
 }
+
+func (r *TaskRepository) GetStatus(ctx context.Context, taskID string) (models.TaskStatus, error) {
+	var status models.TaskStatus
+	query := "SELECT status FROM tasks WHERE id = $1"
+	err := r.db.QueryRowContext(ctx, query, taskID).Scan(&status)
+	return status, err
+}
+
+func (r *TaskRepository) UpdateStatus(ctx context.Context, taskID string, status models.TaskStatus) error {
+	query := `UPDATE tasks SET tasks = $1, updated_at = NOW() WHERE id = $2`
+
+	result, err := r.db.ExecContext(ctx, query, status, taskID)
+	if err != nil {
+		return fmt.Errorf("Failed to execute update task status query: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("Failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("no task found with ID %s to update", taskID)
+	}
+
+	return nil
+}

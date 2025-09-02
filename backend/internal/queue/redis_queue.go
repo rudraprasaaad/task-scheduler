@@ -21,7 +21,6 @@ const (
 
 type RedisQueue struct {
 	client *redisClient.Client
-	pubsub *redis.PubSub
 }
 
 func NewRedisQueue(client *redisClient.Client) *RedisQueue {
@@ -47,7 +46,8 @@ func (rq *RedisQueue) Enqueue(task *models.Task) error {
 	priority := float64(task.Priority)
 	scheduledAtUnix := float64(task.ScheduledAt.Unix())
 
-	score := priority*100000 + scheduledAtUnix
+	score := priority*1e12 + (float64(time.Now().UnixMilli()) - scheduledAtUnix)
+
 	pipe.ZAdd(ctx, TaskQueueKey, redis.Z{
 		Score:  score,
 		Member: task.ID,
@@ -68,7 +68,7 @@ func (rq *RedisQueue) Dequeue(limit int) ([]*models.Task, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	result, err := rq.client.ZRangeByScore(ctx, TaskQueueKey, &redis.ZRangeBy{
+	result, err := rq.client.ZRevRangeByScore(ctx, TaskQueueKey, &redis.ZRangeBy{
 		Min:   "-inf",
 		Max:   "+inf",
 		Count: int64(limit),
@@ -110,10 +110,11 @@ func (rq *RedisQueue) Dequeue(limit int) ([]*models.Task, error) {
 			continue
 		}
 
-		rq.client.ZRem(ctx, TaskQueueKey, taskID)
-
+		if _, err := rq.client.ZRem(ctx, TaskQueueKey, taskID).Result(); err != nil {
+			rq.client.Del(ctx, lockKey)
+			continue
+		}
 		tasks = append(tasks, &task)
-
 		log.Printf("Task %s dequeueud by worker", taskID)
 	}
 
@@ -175,7 +176,7 @@ func (rq *RedisQueue) Size() (int, error) {
 	return int(count), nil
 }
 
-func (rq *RedisQueue) publishTaskUpdate(ctx context.Context, taskID, status string) {
+func (rq *RedisQueue) publishTaskUpdate(ctx context.Context, taskID, _ string) {
 	message := map[string]interface{}{
 		"task_id":   taskID,
 		"timestamp": time.Now().Unix(),
@@ -220,4 +221,20 @@ func (rq *RedisQueue) CleanupExpiredTasks(ctx context.Context) error {
 	}
 
 	return iter.Err()
+}
+
+func (rq *RedisQueue) Remove(taskID string) error {
+	ctx := context.Background()
+
+	_, err := rq.client.ZRem(ctx, TaskQueueKey, taskID).Result()
+	if err != nil {
+		return fmt.Errorf("failed to remove task %s from sorted set queue: %w", taskID, err)
+	}
+
+	taskKey := TaskDataKeyPrefix + taskID
+	lockKey := TaskLockKeyPrefix + taskID
+	rq.client.Del(ctx, taskKey, lockKey)
+
+	log.Printf("Task %s removed from queue", taskID)
+	return nil
 }

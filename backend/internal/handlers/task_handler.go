@@ -227,3 +227,33 @@ func (h *TaskHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 }
+
+func (h *TaskHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	taskID := vars["id"]
+
+	status, err := h.taskRepo.GetStatus(r.Context(), taskID)
+	if err != nil {
+		http.Error(w, "Task Not Found", http.StatusNotFound)
+		return
+	}
+
+	if status != models.TaskStatusPending {
+		http.Error(w, "Cannot cancel task that is not pending", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.queue.Remove(taskID); err != nil {
+		http.Error(w, "Failed to remove task from queue, it may have already started", http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.taskRepo.UpdateStatus(r.Context(), taskID, models.TaskStatusCancelled); err != nil {
+		http.Error(w, "Failed to update task status in database", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Task cancelled successfully"})
+
+}
