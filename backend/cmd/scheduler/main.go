@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/rudraprasaaad/task-scheduler/internal/cache"
 	"github.com/rudraprasaaad/task-scheduler/internal/config"
 	"github.com/rudraprasaaad/task-scheduler/internal/database"
 	"github.com/rudraprasaaad/task-scheduler/internal/handlers"
 	"github.com/rudraprasaaad/task-scheduler/internal/middleware"
+	"github.com/rudraprasaaad/task-scheduler/internal/redis"
 	"github.com/rudraprasaaad/task-scheduler/internal/repository"
 
 	taskpb "github.com/rudraprasaaad/task-scheduler/internal/grpc/generated/task"
@@ -26,30 +28,44 @@ import (
 
 func main() {
 	cfg := config.Load()
+	log.Printf("Starting application in %s environment", cfg.Environment)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	db, err := database.New(&cfg.Database)
+	if cfg.DatabaseURL == "" {
+		log.Fatal("DATABASE_URL environment variable is not set")
+	}
 
+	db, err := database.New(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("Failed to connect in database: %v", err)
 	}
 	defer db.Close()
+	log.Println("Database connection successful.")
+
+	if cfg.RedisURL == "" {
+		log.Fatalf("REDIS_URL environment variable is not set")
+	}
+	redisClient, err := redis.NewClient(cfg.RedisURL)
+	if err != nil {
+		log.Fatalf("Failed to connect to Redis: %v", err)
+	}
+	defer redisClient.Close()
 
 	migrator := database.NewMigrator(db)
 	if err := migrator.RunMigrations("migrations"); err != nil {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
+	log.Println("Database migrations completed successfully.")
 
 	taskRepo := repository.NewTaskRepository(db)
 	workerRepo := repository.NewWorkerRepository(db)
+	cache := cache.NewRedisCache(redisClient, "task_scheduler:")
 
 	grpcServer := grpc.NewServer()
-
 	taskServer := server.NewTaskServer(taskRepo, workerRepo)
 	workerServer := server.NewWorkerServer(workerRepo)
-
 	taskpb.RegisterTaskServiceServer(grpcServer, taskServer)
 	workerpb.RegisterWorkerServiceServer(grpcServer, workerServer)
 
@@ -65,7 +81,7 @@ func main() {
 		}
 	}()
 
-	taskHandler := handlers.NewTaskHandler(taskRepo, workerRepo, cfg.MaxWorkers)
+	taskHandler := handlers.NewTaskHandler(taskRepo, workerRepo, redisClient, cache, cfg.MaxWorkers)
 
 	taskHandler.StartWorkers(ctx)
 	defer taskHandler.StopWorkers()
@@ -84,26 +100,24 @@ func main() {
 	api.HandleFunc("/tasks/stats", taskHandler.GetTaskStats).Methods("GET")
 
 	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
 		if err := db.Health(); err != nil {
-			http.Error(w, "Database unhealthy", http.StatusServiceUnavailable)
+			http.Error(w, `{"status": "error", "message": "database unhealthy"}`, http.StatusServiceUnavailable)
 			return
 		}
 
+		if err := redisClient.Health(r.Context()); err != nil {
+			http.Error(w, `{"status":"error", "message": "redis unhealthy"}`, http.StatusServiceUnavailable)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	}).Methods("GET")
 
 	router.HandleFunc("/db/stats", func(w http.ResponseWriter, r *http.Request) {
 		stats := db.Stats()
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"open_connections":    stats.OpenConnections,
-			"in_use":              stats.InUse,
-			"idle":                stats.Idle,
-			"wait_count":          stats.WaitCount,
-			"wait_duration":       stats.WaitDuration,
-			"max_idle_closed":     stats.MaxIdleClosed,
-			"max_lifetime_closed": stats.MaxLifetimeClosed,
-		})
+		json.NewEncoder(w).Encode(stats)
 	}).Methods("GET")
 
 	server := &http.Server{

@@ -11,33 +11,26 @@ import (
 
 type Client struct {
 	*redis.Client
-	config *Config
 }
 
-func NewClient(cfg *Config) (*Client, error) {
-	rdb := redis.NewClient(&redis.Options{
-		Addr:            fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
-		Password:        cfg.Password,
-		DB:              cfg.DB,
-		MaxRetries:      cfg.MaxRetries,
-		PoolSize:        cfg.PoolSize,
-		MinIdleConns:    cfg.MinIdleConns,
-		ConnMaxLifetime: cfg.ConnMaxLifetime,
-	})
+func NewClient(redisURL string) (*Client, error) {
+	opts, err := redis.ParseURL(redisURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse redis URL: %w", err)
+	}
+
+	rdb := redis.NewClient(opts)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
+		return nil, fmt.Errorf("failed to connect to redis: %W", err)
 	}
 
-	log.Printf("Connected to Redis at %s:%d", cfg.Host, cfg.Port)
+	log.Println("Connected to Redis successfully.")
 
-	return &Client{
-		Client: rdb,
-		config: cfg,
-	}, nil
+	return &Client{Client: rdb}, nil
 }
 
 func (c *Client) Close() error {

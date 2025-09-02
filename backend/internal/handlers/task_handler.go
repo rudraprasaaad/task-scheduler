@@ -3,13 +3,16 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/rudraprasaaad/task-scheduler/internal/cache"
 	"github.com/rudraprasaaad/task-scheduler/internal/models"
 	"github.com/rudraprasaaad/task-scheduler/internal/queue"
+	"github.com/rudraprasaaad/task-scheduler/internal/redis"
 	"github.com/rudraprasaaad/task-scheduler/internal/repository"
 	"github.com/rudraprasaaad/task-scheduler/internal/worker"
 )
@@ -17,20 +20,22 @@ import (
 type TaskHandler struct {
 	taskRepo   *repository.TaskRepository
 	workerRepo *repository.WorkerRepository
-	queue      *queue.DatabaseQueue
+	queue      *queue.RedisQueue
+	cache      *cache.RedisCache
 	pool       *worker.Pool
 }
 
-func NewTaskHandler(taskRepo *repository.TaskRepository, workerRepo *repository.WorkerRepository, workerCount int) *TaskHandler {
-	queue := queue.NewDatabaseQueue(taskRepo)
+func NewTaskHandler(taskRepo *repository.TaskRepository, workerRepo *repository.WorkerRepository, redisClient *redis.Client, cache *cache.RedisCache, workerCount int) *TaskHandler {
+	redisQueue := queue.NewRedisQueue(redisClient)
 
 	handler := &TaskHandler{
 		taskRepo:   taskRepo,
 		workerRepo: workerRepo,
-		queue:      queue,
+		queue:      redisQueue,
+		cache:      cache,
 	}
 
-	handler.pool = worker.NewPool(workerCount, queue, workerRepo)
+	handler.pool = worker.NewPool(workerCount, redisQueue, workerRepo, cache)
 
 	return handler
 }
@@ -78,9 +83,14 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		task.MaxRetries = req.MaxRetries
 	}
 
-	if err := h.queue.Enqueue(task); err != nil {
+	if err := h.taskRepo.Create(r.Context(), task); err != nil {
+		log.Printf("ERROR: Failed to save task to dataase: %v", err)
 		http.Error(w, "Failed to create task", http.StatusInternalServerError)
 		return
+	}
+
+	if err := h.queue.Enqueue(task); err != nil {
+		log.Printf("ERROR: Failed to enqueue task in Redis: %v", err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -172,6 +182,13 @@ func (h *TaskHandler) GetTaskStats(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	cachedStats, err := h.cache.GetCachedTaskStats(ctx)
+	if err == nil && cachedStats != nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(cachedStats)
+		return
+	}
+
 	stats, err := h.taskRepo.GetStats(ctx)
 	if err != nil {
 		http.Error(w, "Failed to get task stats", http.StatusInternalServerError)
@@ -182,7 +199,6 @@ func (h *TaskHandler) GetTaskStats(w http.ResponseWriter, r *http.Request) {
 
 	responseStats := make(map[string]interface{})
 	total := 0
-
 	for status, count := range stats {
 		responseStats[status] = count
 		total += count
@@ -191,8 +207,10 @@ func (h *TaskHandler) GetTaskStats(w http.ResponseWriter, r *http.Request) {
 	responseStats["queue_size"] = queueSize
 	responseStats["total_tasks"] = total
 
+	h.cache.CacheTaskStats(ctx, stats)
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
+	json.NewEncoder(w).Encode(responseStats)
 }
 
 func (h *TaskHandler) DeleteTask(w http.ResponseWriter, r *http.Request) {
