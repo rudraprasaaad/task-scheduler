@@ -12,30 +12,34 @@ import (
 
 type DB struct {
 	*sql.DB
-	config *Config
 }
 
-func New(config *Config) (*DB, error) {
-	db, err := sql.Open("postgres", config.ConnectionString())
+func New(databaseURL string) (*DB, error) {
+	if databaseURL == "" {
+		return nil, fmt.Errorf("DATABASE_URL is not set")
+	}
+
+	db, err := sql.Open("postgres", databaseURL)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, fmt.Errorf("failed to open database connection: %w", err)
 	}
 
-	db.SetMaxOpenConns(config.MaxOpenConns)
-	db.SetMaxIdleConns(config.MaxIdleConns)
-	db.SetConnMaxLifetime(config.ConnMaxLifetime)
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(25)
+	db.SetConnMaxLifetime(5 * time.Minute)
 
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("failedll to ping database: %w", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	log.Printf("Connected to PostgreSQL database:%s", config.DBName)
+	log.Println("Database connection established successfully.")
+	return &DB{DB: db}, nil
 
-	return &DB{
-		DB:     db,
-		config: config,
-	}, nil
 }
 
 func (db *DB) Close() error {
