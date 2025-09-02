@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"time"
@@ -60,6 +61,32 @@ func (r *WorkerRepository) IncrementTaskCount(ctx context.Context, workerID stri
 	}
 
 	return nil
+}
+
+func (r *WorkerRepository) GetByID(ctx context.Context, id string) (*models.Worker, error) {
+	query := `SELECT id, status, last_seen, tasks_run FROM workers WHERE id = $1`
+
+	row := r.db.QueryRowContext(ctx, query, id)
+
+	var worker models.Worker
+
+	err := row.Scan(
+		&worker.ID,
+		&worker.Status,
+		&worker.LastSeen,
+		&worker.LastSeen,
+		&worker.TasksRun,
+	)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("worker with ID %s not found", id)
+		}
+
+		return nil, fmt.Errorf("error scanning worker data %w", err)
+	}
+
+	return &worker, nil
 }
 
 func (r *WorkerRepository) GetAll(ctx context.Context) ([]*models.Worker, error) {

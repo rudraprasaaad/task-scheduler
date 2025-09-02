@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rudraprasaaad/task-scheduler/internal/cache"
 	"github.com/rudraprasaaad/task-scheduler/internal/executor"
 	"github.com/rudraprasaaad/task-scheduler/internal/models"
 	"github.com/rudraprasaaad/task-scheduler/internal/queue"
@@ -30,9 +31,10 @@ const (
 
 type Pool struct {
 	workers    map[string]*models.Worker
-	queue      *queue.DatabaseQueue
+	queue      *queue.RedisQueue
 	executor   *executor.ExecutorRegistry
 	workerRepo *repository.WorkerRepository
+	cache      *cache.RedisCache
 
 	workerCount int
 	stopChan    chan struct{}
@@ -40,12 +42,13 @@ type Pool struct {
 	mutex       sync.RWMutex
 }
 
-func NewPool(workerCount int, queue *queue.DatabaseQueue, workerRepo *repository.WorkerRepository) *Pool {
+func NewPool(workerCount int, queue *queue.RedisQueue, workerRepo *repository.WorkerRepository, cache *cache.RedisCache) *Pool {
 	return &Pool{
 		workers:     make(map[string]*models.Worker),
 		queue:       queue,
 		executor:    executor.NewExecutorRegistry(),
 		workerRepo:  workerRepo,
+		cache:       cache,
 		workerCount: workerCount,
 		stopChan:    make(chan struct{}),
 	}
@@ -134,6 +137,7 @@ func (p *Pool) runWorker(ctx context.Context, worker *models.Worker) {
 
 func (p *Pool) processTask(ctx context.Context, worker *models.Worker, task *models.Task) {
 	p.updateWorkerStatus(ctx, worker, models.WorkerStatusRunning)
+	p.cache.SetWorkerStats(ctx, worker.ID, map[string]interface{}{"status": "running", "task_id": task.ID})
 
 	task.Status = models.TaskStatusRunning
 	task.WorkerID = worker.ID
@@ -157,6 +161,7 @@ func (p *Pool) processTask(ctx context.Context, worker *models.Worker, task *mod
 	worker.TasksRun++
 	p.workerRepo.IncrementTaskCount(ctx, worker.ID)
 	p.updateWorkerStatus(ctx, worker, models.WorkerStatusIdle)
+	p.cache.SetWorkerStats(ctx, worker.ID, map[string]interface{}{"status": "idle"})
 }
 
 func (p *Pool) executeTask(ctx context.Context, task *models.Task) error {
@@ -220,6 +225,12 @@ func (p *Pool) updateWorkerStatus(ctx context.Context, worker *models.Worker, st
 	if err := p.workerRepo.UpdateStatus(ctx, worker.ID, status); err != nil {
 		log.Printf("Failed to update worker status in database: %v", err)
 	}
+
+	p.cache.SetWorkerStats(ctx, worker.ID, map[string]interface{}{
+		"status":    status,
+		"tasks_run": worker.TasksRun,
+		"last_seen": worker.LastSeen.UTC().Format(time.RFC3339),
+	})
 }
 
 func (p *Pool) monitorWorkers(ctx context.Context) {
@@ -272,27 +283,34 @@ func (p *Pool) logWorkerStats() {
 
 func (p *Pool) GetWorkerStats() (map[string]interface{}, error) {
 	ctx := context.Background()
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
 
-	dbWorkers, err := p.workerRepo.GetAll(ctx)
-	if err != nil {
-		return nil, err
-	}
+	workers := make([]map[string]interface{}, 0, len(p.workers))
+	for workerID := range p.workers {
+		stats, err := p.cache.GetWorkerStats(ctx, workerID)
+		if err != nil {
+			dbWorker, dbErr := p.workerRepo.GetByID(ctx, workerID)
+			if dbErr == nil {
+				workers = append(workers, map[string]interface{}{
+					"id":        dbWorker.ID,
+					"status":    dbWorker.Status,
+					"last_seen": dbWorker.LastSeen,
+					"tasks_run": dbWorker.TasksRun,
+				})
+			}
+			continue
+		}
 
-	workers := make([]map[string]interface{}, 0, len(dbWorkers))
-	for _, worker := range dbWorkers {
-		workers = append(workers, map[string]interface{}{
-			"id":        worker.ID,
-			"status":    worker.Status,
-			"last_seen": worker.LastSeen,
-			"tasks_run": worker.TasksRun,
-		})
+		stats["id"] = workerID
+		workers = append(workers, stats)
 	}
 
 	queueSize, _ := p.queue.Size()
 
 	return map[string]interface{}{
 		"workers":       workers,
-		"total_workers": len(dbWorkers),
+		"total_workers": len(p.workers),
 		"queue_size":    queueSize,
 	}, nil
 }
