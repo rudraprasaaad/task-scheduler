@@ -1,7 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
-
--- Users table
 CREATE TABLE IF NOT EXISTS users(
 	id SERIAL PRIMARY KEY,
 	email VARCHAR(255) UNIQUE NOT NULL,
@@ -21,7 +19,6 @@ CREATE TABLE IF NOT EXISTS user_roles(
 	PRIMARY KEY (user_id, role_id)
 ); 
 
--- Tasks table
 CREATE TABLE IF NOT EXISTS tasks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
@@ -61,9 +58,6 @@ BEFORE UPDATE ON users
 FOR EACH ROW
 EXECUTE PROCEDURE update_timestamp_column();
 
-
-
--- Workers table
 CREATE TABLE IF NOT EXISTS workers (
     id VARCHAR(100) PRIMARY KEY,
     status VARCHAR(50) NOT NULL DEFAULT 'idle',
@@ -129,14 +123,6 @@ CREATE TRIGGER update_tasks_modtime
 BEFORE UPDATE ON tasks
 FOR EACH ROW
 EXECUTE PROCEDURE update_timestamp_column();
-
-DROP TRIGGER IF EXISTS update_tasks_modtime ON tasks; -- Drop first to ensure no duplicates.
-CREATE TRIGGER update_tasks_modtime
-BEFORE UPDATE ON tasks
-FOR EACH ROW
-EXECUTE PROCEDURE update_timestamp_column();
-
-
 
 -- indexes
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks (status);
