@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"time"
 )
 
 type Config struct {
@@ -12,9 +13,20 @@ type Config struct {
 	MaxWorkers  int
 	LogLevel    string
 	Environment string
+	Auth        AuthConfig
+}
+
+type AuthConfig struct {
+	JWTSecret       string
+	TokenExpiration time.Duration
 }
 
 func Load() *Config {
+	tokenExp, err := time.ParseDuration(getEnv("JWT_EXPIRATION", "24h"))
+	if err != nil {
+		tokenExp = 24 * time.Hour
+	}
+
 	return &Config{
 		Port:        getEnv("PORT", "8080"),
 		DatabaseURL: getEnv("DATABASE_URL", ""),
@@ -22,6 +34,10 @@ func Load() *Config {
 		MaxWorkers:  getEnvAsInt("MAX_WORKERS", 10),
 		LogLevel:    getEnv("LOG_LEVEL", "info"),
 		Environment: getEnv("ENVIRONMENT", "development"),
+		Auth: AuthConfig{
+			JWTSecret:       getEnv("JWT_SECRET_KEY", ""),
+			TokenExpiration: tokenExp,
+		},
 	}
 }
 

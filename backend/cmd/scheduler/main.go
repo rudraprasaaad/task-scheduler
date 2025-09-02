@@ -61,6 +61,7 @@ func main() {
 
 	taskRepo := repository.NewTaskRepository(db)
 	workerRepo := repository.NewWorkerRepository(db)
+	userRepo := repository.NewUserRepository(db)
 	cache := cache.NewRedisCache(redisClient, "task_scheduler:")
 
 	grpcServer := grpc.NewServer()
@@ -81,6 +82,7 @@ func main() {
 		}
 	}()
 
+	authHandler := handlers.NewAuthHandler(userRepo, cfg.Auth)
 	taskHandler := handlers.NewTaskHandler(taskRepo, workerRepo, redisClient, cache, cfg.MaxWorkers)
 
 	taskHandler.StartWorkers(ctx)
@@ -88,13 +90,21 @@ func main() {
 
 	router := mux.NewRouter()
 
-	router.Use(middleware.LoggingMiddleware)
+	rateLimiter := middleware.RateLimitMiddleware(10, 20)
+	router.Use(middleware.LoggingMiddleware, rateLimiter)
+
+	authRouter := router.PathPrefix("/api/v1/auth").Subrouter()
+	authRouter.HandleFunc("/register", authHandler.Register).Methods("POST")
+	authRouter.HandleFunc("/login", authHandler.Login).Methods("POST")
 
 	api := router.PathPrefix("/api/v1").Subrouter()
+	api.Use(middleware.AuthMiddleware(cfg.Auth.JWTSecret))
+
 	api.HandleFunc("/tasks", taskHandler.CreateTask).Methods("POST")
 	api.HandleFunc("/tasks", taskHandler.ListTasks).Methods("GET")
 	api.HandleFunc("/tasks/{id}", taskHandler.GetTaskByID).Methods("GET")
 	api.HandleFunc("/tasks/{id}", taskHandler.DeleteTask).Methods("DELETE")
+	api.HandleFunc("/tasks/{id}/cancel", taskHandler.CancelTask).Methods("POST")
 	api.HandleFunc("/queue/status", taskHandler.GetQueueStatus).Methods("GET")
 	api.HandleFunc("/workers/stats", taskHandler.GetWorkerStats).Methods("GET")
 	api.HandleFunc("/tasks/stats", taskHandler.GetTaskStats).Methods("GET")
