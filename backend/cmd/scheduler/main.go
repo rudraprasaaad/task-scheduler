@@ -14,9 +14,11 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/rudraprasaaad/task-scheduler/internal/cache"
 	"github.com/rudraprasaaad/task-scheduler/internal/config"
+	"github.com/rudraprasaaad/task-scheduler/internal/cron"
 	"github.com/rudraprasaaad/task-scheduler/internal/database"
 	"github.com/rudraprasaaad/task-scheduler/internal/handlers"
 	"github.com/rudraprasaaad/task-scheduler/internal/middleware"
+	"github.com/rudraprasaaad/task-scheduler/internal/queue"
 	"github.com/rudraprasaaad/task-scheduler/internal/redis"
 	"github.com/rudraprasaaad/task-scheduler/internal/repository"
 
@@ -63,6 +65,7 @@ func main() {
 	taskRepo := repository.NewTaskRepository(db)
 	workerRepo := repository.NewWorkerRepository(db)
 	userRepo := repository.NewUserRepository(db)
+	redisQueue := queue.NewRedisQueue(redisClient)
 	cache := cache.NewRedisCache(redisClient, "task_scheduler:")
 
 	authInterceptor := interceptor.NewAuthInterceptor(cfg.Auth.JWTSecret)
@@ -86,6 +89,14 @@ func main() {
 			log.Fatalf("Failed to server gRPC: %v", err)
 		}
 	}()
+
+	cronScheduler, err := cron.NewScheduler(redisQueue)
+	if err != nil {
+		log.Fatalf("Failed to create cron scheduler: %v", err)
+	}
+	cronScheduler.RegisterJobs()
+	cronScheduler.Start()
+	defer cronScheduler.Stop()
 
 	authHandler := handlers.NewAuthHandler(userRepo, cfg.Auth)
 	taskHandler := handlers.NewTaskHandler(taskRepo, workerRepo, redisClient, cache, cfg.MaxWorkers)
