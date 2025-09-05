@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -15,6 +16,53 @@ import (
 type Client struct {
 	BaseURL    string
 	HTTPClient *http.Client
+}
+
+type Task struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type CreateTaskPayload struct {
+	Name     string          `json:"name"`
+	Type     string          `json:"type"`
+	Payload  json.RawMessage `json:"payload"`
+	Priority int             `json:"priority"`
+}
+
+func (c *Client) CreateTask(payload CreateTaskPayload) (*Task, error) {
+	requestBody, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal create task payload: %w", err)
+	}
+
+	req, err := http.NewRequest("POST", c.BaseURL+"/api/v1/tasks", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	res, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send create task request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(res.Body)
+		return nil, fmt.Errorf("create task failed with status %s: %s", res.Status, string(body))
+	}
+
+	var createdTask Task
+	if err := json.NewDecoder(res.Body).Decode(&createdTask); err != nil {
+		return nil, fmt.Errorf("failed to decode create task response: %w", err)
+	}
+
+	return &createdTask, nil
 }
 
 func NewClient(baseURL string) (*Client, error) {
