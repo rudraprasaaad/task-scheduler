@@ -159,3 +159,33 @@ func (c *Client) loadCookies() error {
 	c.HTTPClient.Jar.SetCookies(apiURL, cookies)
 	return nil
 }
+
+func (c *Client) ListTasks(limit, offset int) ([]Task, error) {
+	url := fmt.Sprintf("%s/api/v1/tasks?limit=%d&offset=%d", c.BaseURL, limit, offset)
+	req, err := http.NewRequest("GET", url, nil)
+
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := c.HTTPClient.Do(req)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to send list tasks request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list tasks failed with status: %s", res.Status)
+	}
+
+	var response struct {
+		Tasks []Task `json:"tasks"`
+	}
+
+	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decoee list tasks response: %w", err)
+	}
+
+	return response.Tasks, nil
+}
