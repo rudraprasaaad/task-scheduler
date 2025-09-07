@@ -7,6 +7,7 @@ import (
 
 	"strconv"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/rudraprasaaad/task-scheduler/internal/auth"
 	"github.com/rudraprasaaad/task-scheduler/internal/config"
 	"github.com/rudraprasaaad/task-scheduler/internal/models"
@@ -58,13 +59,13 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
-		http.Error(w, "Invalid Request", http.StatusBadRequest)
+		http.Error(w, "Invalid request Body", http.StatusBadRequest)
 		return
 	}
 
 	user, err := h.userRepo.GetByEmail(r.Context(), creds.Email)
 	if err != nil {
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
 		return
 	}
 
@@ -74,8 +75,18 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	role := "user"
-	tokenString, err := auth.GenrerateToken(strconv.FormatInt(user.ID, 10), role, h.authCfg.JWTSecret, h.authCfg.TokenExpiration)
-	// tokenString, err := auth.GenrerateToken(string(user.ID), role, jwtSecret)
+
+	expirationTime := time.Now().Add(h.authCfg.TokenExpiration)
+
+	claims := &auth.Claims{
+		UserID: strconv.FormatInt(user.ID, 10),
+		Role:   role,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
+		},
+	}
+
+	tokenString, err := auth.GenrerateToken(claims, h.authCfg.JWTSecret)
 	if err != nil {
 		http.Error(w, "Failed to create token", http.StatusInternalServerError)
 		return
@@ -84,13 +95,28 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "auth_token",
 		Value:    tokenString,
-		Expires:  time.Now().Add(24 * time.Hour),
+		Expires:  expirationTime,
 		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
 		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
 	})
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "login successful"})
+	json.NewEncoder(w).Encode(map[string]string{"message": "Login Successful"})
+}
+
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "auth_token",
+		Value:    "",
+		Expires:  time.Now().Add(-time.Hour),
+		HttpOnly: true,
+		Path:     "/",
+		SameSite: http.SameSiteLaxMode,
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"message": "Logout Successful"})
 }
