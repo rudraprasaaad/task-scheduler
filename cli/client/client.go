@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -47,6 +48,23 @@ type TaskDetail struct {
 	ScheduledAt time.Time              `json:"scheduled_at"`
 	StartedAt   *time.Time             `json:"started_at,omitempty"`
 	WorkerID    string                 `json:"worker_id,omitempty"`
+}
+
+type QueueStatus struct {
+	QueueSize int       `json:"queue_size"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+type WorkerStats struct {
+	ID       string    `json:"id"`
+	Status   string    `json:"status"`
+	TasksRun int       `json:"tasks_run"`
+	LastSeen time.Time `json:"last_seen"`
+}
+
+type SystemStatus struct {
+	QueueSize int
+	Workers   []WorkerStats
 }
 
 func (c *Client) CreateTask(payload CreateTaskPayload) (*Task, error) {
@@ -253,4 +271,78 @@ func (c *Client) CancelTaskk(taskID string) error {
 	}
 
 	return nil
+}
+
+func (c *Client) GetSystemStatus() (*SystemStatus, error) {
+	var queueStatus QueueStatus
+	var workerStats struct {
+		Workers []WorkerStats `json:"workers"`
+	}
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		url := fmt.Sprintf("%s/api/v1/queue/status", c.BaseURL)
+		req, err := http.NewRequest("GET", url, nil)
+
+		if err != nil {
+			errs <- err
+			return
+		}
+
+		res, err := c.HTTPClient.Do(req)
+		if err != nil {
+			errs <- err
+			return
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			errs <- fmt.Errorf("queue status failed to with status: %s", res.Status)
+			return
+		}
+
+		if err := json.NewDecoder(res.Body).Decode(&queueStatus); err != nil {
+			errs <- err
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		url := fmt.Sprintf("%s/api/v1/workers/stats", c.BaseURL)
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			errs <- err
+			return
+		}
+		res, err := c.HTTPClient.Do(req)
+		if err != nil {
+			errs <- err
+			return
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			errs <- fmt.Errorf("worker stats failed with stats: %s", res.Status)
+			return
+		}
+		if err := json.NewDecoder(res.Body).Decode(&workerStats); err != nil {
+			errs <- err
+		}
+	}()
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &SystemStatus{
+		QueueSize: queueStatus.QueueSize,
+		Workers:   workerStats.Workers,
+	}, nil
 }
