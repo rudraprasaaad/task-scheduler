@@ -231,3 +231,26 @@ func (c *Client) GetTask(taskID string) (*TaskDetail, error) {
 
 	return &taskDetail, nil
 }
+
+func (c *Client) CancelTaskk(taskID string) error {
+	url := fmt.Sprintf("%s/api/v1/tasks/%s/cancel", c.BaseURL, taskID)
+	req, err := http.NewRequest("POST", url, nil)
+	if err != nil {
+		return err
+	}
+
+	res, err := c.HTTPClient.Do(req)
+
+	if err != nil {
+		return fmt.Errorf("failed to send cancel task request: %w", err)
+	}
+
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		return fmt.Errorf("cancel task failed with status %s: %s", res.Status, string(body))
+	}
+
+	return nil
+}
