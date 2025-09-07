@@ -51,3 +51,7 @@ var taskGetCmd = &cobra.Command{
 		fmt.Printf("Payload:\n%s\n", string(payload))
 	},
 }
+
+func init() {
+	taskCmd.AddCommand(taskGetCmd)
+}
