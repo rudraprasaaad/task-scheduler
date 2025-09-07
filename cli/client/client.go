@@ -33,6 +33,22 @@ type CreateTaskPayload struct {
 	Priority int             `json:"priority"`
 }
 
+type TaskDetail struct {
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	Type        string                 `json:"type"`
+	Payload     map[string]interface{} `json:"payload"`
+	Status      string                 `json:"status"`
+	Priority    int                    `json:"priority"`
+	Retries     int                    `json:"retries"`
+	MaxRetries  int                    `json:"max_retries"`
+	Error       string                 `json:"error,omitempty"`
+	CreatedAt   time.Time              `json:"created_at"`
+	ScheduledAt time.Time              `json:"scheduled_at"`
+	StartedAt   *time.Time             `json:"started_at,omitempty"`
+	WorkerID    string                 `json:"worker_id,omitempty"`
+}
+
 func (c *Client) CreateTask(payload CreateTaskPayload) (*Task, error) {
 	requestBody, err := json.Marshal(payload)
 	if err != nil {
@@ -188,4 +204,30 @@ func (c *Client) ListTasks(limit, offset int) ([]Task, error) {
 	}
 
 	return response.Tasks, nil
+}
+
+func (c *Client) GetTask(taskID string) (*TaskDetail, error) {
+	url := fmt.Sprintf("%s/api/v1/tasks/%s", c.BaseURL, taskID)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send get task request: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(res.Body)
+		return nil, fmt.Errorf("get task failed with status %s: %s", res.Status, string(body))
+	}
+
+	var taskDetail TaskDetail
+	if err := json.NewDecoder(res.Body).Decode(&taskDetail); err != nil {
+		return nil, fmt.Errorf("failed to decode get task response: %w", err)
+	}
+
+	return &taskDetail, nil
 }
