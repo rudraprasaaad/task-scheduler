@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
 	"github.com/rudraprasaaad/task-scheduler/internal/cache"
 	"github.com/rudraprasaaad/task-scheduler/internal/config"
 	"github.com/rudraprasaaad/task-scheduler/internal/cron"
@@ -30,6 +31,12 @@ import (
 )
 
 func main() {
+
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("Waring: .env file not found, readingi from system envrionment")
+	}
+
 	cfg := config.Load()
 	log.Printf("Starting application in %s environment", cfg.Environment)
 
