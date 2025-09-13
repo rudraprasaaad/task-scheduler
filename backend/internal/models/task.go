@@ -42,6 +42,17 @@ type Task struct {
 	WorkerID    string                 `json:"worker_id,omitempty"`
 }
 
+type TaskExecution struct {
+	ID              string    `json:"id"`
+	TaskID          string    `json:"task_id"`
+	WorkerID        string    `json:"worker_id"`
+	StartedAt       time.Time `json:"started_at"`
+	CompletedAt     time.Time `json:"completed_at"`
+	Status          string    `json:"status"`
+	Error           string    `json:"error,omitempty"`
+	ExecutionTimeMs string    `json:"execution_time_ms"`
+}
+
 func NewTask(name, taskType string, payload map[string]interface{}) *Task {
 	now := time.Now()
 

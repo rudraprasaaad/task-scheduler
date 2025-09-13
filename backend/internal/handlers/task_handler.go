@@ -20,22 +20,24 @@ import (
 type TaskHandler struct {
 	taskRepo   *repository.TaskRepository
 	workerRepo *repository.WorkerRepository
+	execRepo   *repository.TaskExecutionRepository
 	queue      *queue.RedisQueue
 	cache      *cache.RedisCache
 	pool       *worker.Pool
 }
 
-func NewTaskHandler(taskRepo *repository.TaskRepository, workerRepo *repository.WorkerRepository, redisClient *redis.Client, cache *cache.RedisCache, workerCount int) *TaskHandler {
+func NewTaskHandler(taskRepo *repository.TaskRepository, workerRepo *repository.WorkerRepository, execRepo *repository.TaskExecutionRepository, redisClient *redis.Client, cache *cache.RedisCache, workerCount int) *TaskHandler {
 	redisQueue := queue.NewRedisQueue(redisClient)
 
 	handler := &TaskHandler{
 		taskRepo:   taskRepo,
 		workerRepo: workerRepo,
+		execRepo:   execRepo,
 		queue:      redisQueue,
 		cache:      cache,
 	}
 
-	handler.pool = worker.NewPool(workerCount, redisQueue, workerRepo, cache)
+	handler.pool = worker.NewPool(workerCount, redisQueue, workerRepo, taskRepo, execRepo, cache)
 
 	return handler
 }
@@ -83,18 +85,14 @@ func (h *TaskHandler) CreateTask(w http.ResponseWriter, r *http.Request) {
 		task.MaxRetries = req.MaxRetries
 	}
 
-	if err := h.taskRepo.Create(r.Context(), task); err != nil {
-		log.Printf("ERROR: Failed to save task to dataase: %v", err)
-		http.Error(w, "Failed to create task", http.StatusInternalServerError)
+	if err := h.queue.Enqueue(task); err != nil {
+		log.Printf("ERROR: Failed to enqueue task in Redis: %v", err)
+		http.Error(w, "Failed to schedule task", http.StatusInternalServerError)
 		return
 	}
 
-	if err := h.queue.Enqueue(task); err != nil {
-		log.Printf("ERROR: Failed to enqueue task in Redis: %v", err)
-	}
-
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(task)
 }
 
@@ -255,5 +253,4 @@ func (h *TaskHandler) CancelTask(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"message": "Task cancelled successfully"})
-
 }

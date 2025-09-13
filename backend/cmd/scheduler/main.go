@@ -72,6 +72,7 @@ func main() {
 	taskRepo := repository.NewTaskRepository(db)
 	workerRepo := repository.NewWorkerRepository(db)
 	userRepo := repository.NewUserRepository(db)
+	execRepo := repository.NewTaskExecutionRepository(db)
 	redisQueue := queue.NewRedisQueue(redisClient)
 	cache := cache.NewRedisCache(redisClient, "task_scheduler:")
 
@@ -106,7 +107,7 @@ func main() {
 	defer cronScheduler.Stop()
 
 	authHandler := handlers.NewAuthHandler(userRepo, cfg.Auth)
-	taskHandler := handlers.NewTaskHandler(taskRepo, workerRepo, redisClient, cache, cfg.MaxWorkers)
+	taskHandler := handlers.NewTaskHandler(taskRepo, workerRepo, execRepo, redisClient, cache, cfg.MaxWorkers)
 
 	taskHandler.StartWorkers(ctx)
 	defer taskHandler.StopWorkers()

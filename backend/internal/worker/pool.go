@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/rudraprasaaad/task-scheduler/internal/cache"
 	"github.com/rudraprasaaad/task-scheduler/internal/executor"
 	"github.com/rudraprasaaad/task-scheduler/internal/models"
@@ -34,6 +36,8 @@ type Pool struct {
 	queue      *queue.RedisQueue
 	executor   *executor.ExecutorRegistry
 	workerRepo *repository.WorkerRepository
+	taskRepo   *repository.TaskRepository
+	execRepo   *repository.TaskExecutionRepository
 	cache      *cache.RedisCache
 
 	workerCount int
@@ -42,12 +46,14 @@ type Pool struct {
 	mutex       sync.RWMutex
 }
 
-func NewPool(workerCount int, queue *queue.RedisQueue, workerRepo *repository.WorkerRepository, cache *cache.RedisCache) *Pool {
+func NewPool(workerCount int, queue *queue.RedisQueue, workerRepo *repository.WorkerRepository, taskRepo *repository.TaskRepository, execRepo *repository.TaskExecutionRepository, cache *cache.RedisCache) *Pool {
 	return &Pool{
 		workers:     make(map[string]*models.Worker),
 		queue:       queue,
 		executor:    executor.NewExecutorRegistry(),
 		workerRepo:  workerRepo,
+		taskRepo:    taskRepo,
+		execRepo:    execRepo,
 		cache:       cache,
 		workerCount: workerCount,
 		stopChan:    make(chan struct{}),
@@ -102,7 +108,6 @@ func (p *Pool) registerWorker(ctx context.Context, worker *models.Worker) error 
 
 func (p *Pool) runWorker(ctx context.Context, worker *models.Worker) {
 	defer p.wg.Done()
-
 	log.Printf("Worker %s started", worker.ID)
 
 	ticker := time.NewTicker(500 * time.Millisecond)
@@ -141,21 +146,45 @@ func (p *Pool) processTask(ctx context.Context, worker *models.Worker, task *mod
 
 	task.Status = models.TaskStatusRunning
 	task.WorkerID = worker.ID
-	now := time.Now()
-	task.StartedAt = &now
-
-	if err := p.queue.UpdateTask(task); err != nil {
-		log.Printf("Failed to update task status: %v", err)
-	}
+	startTime := time.Now()
+	task.StartedAt = &startTime
 
 	log.Printf("Worker %s processing task %s (%s)", worker.ID, task.ID, task.Type)
 
-	err := p.executeTask(ctx, task)
+	execErr := p.executeTask(ctx, task)
+	endTime := time.Now()
+	durationMs := endTime.Sub(startTime).Milliseconds()
 
-	if err != nil {
-		p.handleTaskFailure(task, err)
+	if execErr != nil {
+		p.handleTaskFailure(task, execErr)
 	} else {
 		p.handleTaskSuccess(task)
+	}
+
+	dbCtx, dbCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer dbCancel()
+
+	if err := p.taskRepo.Create(dbCtx, task); err != nil {
+		log.Printf("CRITICAL ERROR: Failed to persist final task state for task %s: %v", task.ID, err)
+	} else {
+		executionRecord := &models.TaskExecution{
+			ID:              uuid.New().String(),
+			TaskID:          task.ID,
+			WorkerID:        worker.ID,
+			StartedAt:       startTime,
+			CompletedAt:     endTime,
+			ExecutionTimeMs: strconv.FormatInt(durationMs, 10),
+		}
+		if execErr != nil {
+			executionRecord.Status = "failed"
+			executionRecord.Error = execErr.Error()
+		} else {
+			executionRecord.Status = "completed"
+		}
+
+		if err := p.execRepo.Create(dbCtx, executionRecord); err != nil {
+			log.Printf("CRITICAL ERROR: Failed to persist task execution record for task %s: %v", task.ID, err)
+		}
 	}
 
 	worker.TasksRun++
@@ -182,10 +211,6 @@ func (p *Pool) handleTaskSuccess(task *models.Task) {
 	task.CompletedAt = &now
 	task.Error = ""
 
-	if err := p.queue.UpdateTask(task); err != nil {
-		log.Printf("Failed to update task after success: %v", err)
-	}
-
 	log.Printf("✅ Task %s completed successfully", task.ID)
 }
 
@@ -202,6 +227,10 @@ func (p *Pool) handleTaskFailure(task *models.Task, execErr error) {
 
 		log.Printf("⚠️ Task %s failed (attempt %d/%d), retrying in %v: %v",
 			task.ID, task.Retries, task.MaxRetries, backoff, execErr)
+
+		if err := p.queue.Enqueue(task); err != nil {
+			log.Printf("CRITICAL ERROR: Failed to re-enqueue task %s for retry: %v", task.ID, err)
+		}
 	} else {
 		task.Status = models.TaskStatusFailed
 		now := time.Now()
@@ -209,10 +238,6 @@ func (p *Pool) handleTaskFailure(task *models.Task, execErr error) {
 
 		log.Printf("❌ Task %s failed permanently after %d attempts: %v",
 			task.ID, task.Retries, execErr)
-	}
-
-	if err := p.queue.UpdateTask(task); err != nil {
-		log.Printf("Failed to update task after failure: %v", err)
 	}
 }
 
